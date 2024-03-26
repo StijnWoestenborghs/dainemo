@@ -126,29 +126,27 @@ fn _should_parallelize_dot[
         return True
 
 @always_inline
-fn dot[
-    S1: TensorShape, S2: TensorShape
-](inout res: Tensor[dtype], t1: Tensor[dtype], t2: Tensor[dtype]):
-    memset_zero[dtype](res.data(), res.num_elements())
-    
-    alias R = S1[0]
-    alias S = S1[1]
-    alias C = S2[1]
-    
+fn dot_generic[
+    S1: TensorShape, S2: TensorShape, R: Int, S: Int, C: Int, 
+    t1_load: fn [S: Int](Int, Int) capturing -> SIMD[dtype, 1], 
+    t2_load: fn [N: Int, C: Int](Int, Int) capturing -> SIMD[dtype, N],
+    res_store: fn [N: Int, C: Int](Int, Int, SIMD[dtype, N]) capturing -> None,
+    res_load: fn [N: Int, C: Int](row: Int, col: Int) capturing -> SIMD[dtype, N],
+]():
     for row_block in range(0, R, BLOCK_SIZE):
         for col_block in range(0, C, BLOCK_SIZE):
             for inner_block in range(0, S, BLOCK_SIZE):
                 for row in range(row_block, min(row_block + BLOCK_SIZE, R)):
                     for inner in range(inner_block, min(inner_block + BLOCK_SIZE, S)):
-                        var t1_val = t1[row * S + inner]
+                        var t1_val = t1_load[S](row, inner)
 
                         @parameter
                         fn vec_n[nelts: Int](col: Int):
-                            var curr = res.simd_load[nelts](row * C + col)
-                            var t2_val = t2.simd_load[nelts](inner * C + col)
+                            var curr = res_load[nelts, C](row, col)
+                            var t2_val = t2_load[nelts, C](inner, col)
 
-                            res.simd_store[nelts](
-                                row * C + col,
+                            res_store[nelts, C](
+                                row, col,
                                 t2_val.fma(
                                     t1_val,
                                     curr,
@@ -156,6 +154,38 @@ fn dot[
                             )
 
                         vectorize[vec_n, nelts](min(col_block + BLOCK_SIZE, C))
+
+@always_inline
+fn dot[
+    S1: TensorShape, S2: TensorShape
+](inout res: Tensor[dtype], t1: Tensor[dtype], t2: Tensor[dtype]):
+    memset_zero[dtype](res.data(), res.num_elements())
+
+    alias R = S1[0]
+    alias S = S1[1]
+    alias C = S2[1]
+
+    @parameter
+    @always_inline("nodebug")
+    fn t1_load[S: Int](row: Int, inner: Int) -> SIMD[dtype, 1]:
+        return t1.simd_load[1](row * S + inner)
+
+    @parameter
+    @always_inline("nodebug")
+    fn t2_load[N: Int, C: Int](inner: Int, col: Int) -> SIMD[dtype, N]:
+        return t2.simd_load[N](inner * C + col)
+
+    @parameter
+    @always_inline("nodebug")
+    fn res_store[N: Int, C: Int](row: Int, col: Int, val: SIMD[dtype, N]):
+        res.simd_store[N](row * C + col, val)
+
+    @parameter
+    @always_inline("nodebug")
+    fn res_load[N: Int, C: Int](row: Int, col: Int) -> SIMD[dtype, N]:
+        return res.simd_load[N](row * C + col)
+    
+    dot_generic[S1, S2, R, S, C, t1_load, t2_load, res_store, res_load]()
 
 
 @always_inline
@@ -164,34 +194,31 @@ fn dot_transpose_t2[
 ](inout res: Tensor[dtype], t1: Tensor[dtype], t2: Tensor[dtype]):
     memset_zero[dtype](res.data(), res.num_elements())
 
-    # Same as dot, but with t2 transposed
-    # Should be faster
-
     alias R = S1[0]
     alias S = S1[1]
     alias C = S2[0]
 
-    for row_block in range(0, R, BLOCK_SIZE):
-        for col_block in range(0, C, BLOCK_SIZE):
-            for inner_block in range(0, S, BLOCK_SIZE):
-                for row in range(row_block, min(row_block + BLOCK_SIZE, R)):
-                    for inner in range(inner_block, min(inner_block + BLOCK_SIZE, S)):
-                        var t1_val = t1[row * S + inner]
+    @parameter
+    @always_inline("nodebug")
+    fn t1_load[S: Int](row: Int, inner: Int) -> SIMD[dtype, 1]:
+        return t1.simd_load[1](row * S + inner)
 
-                        @parameter
-                        fn vec_n[nelts: Int](col: Int):
-                            var curr = res.simd_load[nelts](row * C + col)
-                            var t2_val = t2.simd_load[nelts](col * S + inner)
+    @parameter
+    @always_inline("nodebug")
+    fn t2_load[N: Int, C: Int](col: Int, inner: Int) -> SIMD[dtype, N]:
+        return t2.simd_load[N](col * S + inner)
 
-                            res.simd_store[nelts](
-                                row * C + col,
-                                t2_val.fma(
-                                    t1_val,
-                                    curr,
-                                ),
-                            )
+    @parameter
+    @always_inline("nodebug")
+    fn res_store[N: Int, C: Int](row: Int, col: Int, val: SIMD[dtype, N]):
+        res.simd_store[N](row * C + col, val)
 
-                        vectorize[vec_n, nelts](min(col_block + BLOCK_SIZE, C))
+    @parameter
+    @always_inline("nodebug")
+    fn res_load[N: Int, C: Int](row: Int, col: Int) -> SIMD[dtype, N]:
+        return res.simd_load[N](row * C + col)
+
+    dot_generic[S1, S2, R, S, C, t1_load, t2_load, res_store, res_load]()
 
 
 @always_inline
@@ -200,34 +227,31 @@ fn dot_transpose_t1[
 ](inout res: Tensor[dtype], t1: Tensor[dtype], t2: Tensor[dtype]):
     memset_zero[dtype](res.data(), res.num_elements())
 
-    # Same as dot, but with t1 transposed
-    # Should be faster
-
     alias R = S1[1]
     alias S = S1[0]
     alias C = S2[1]
 
-    for row_block in range(0, R, BLOCK_SIZE):
-        for col_block in range(0, C, BLOCK_SIZE):
-            for inner_block in range(0, S, BLOCK_SIZE):
-                for row in range(row_block, min(row_block + BLOCK_SIZE, R)):
-                    for inner in range(inner_block, min(inner_block + BLOCK_SIZE, S)):
-                        var t1_val = t1[inner * R + row]
+    @parameter
+    @always_inline("nodebug")
+    fn t1_load[S: Int](row: Int, inner: Int) -> SIMD[dtype, 1]:
+        return t1.simd_load[1](inner * R + row)
 
-                        @parameter
-                        fn vec_n[nelts: Int](col: Int):
-                            var curr = res.simd_load[nelts](row * C + col)
-                            var t2_val = t2.simd_load[nelts](inner * C + col)
+    @parameter
+    @always_inline("nodebug")
+    fn t2_load[N: Int, C: Int](inner: Int, col: Int) -> SIMD[dtype, N]:
+        return t2.simd_load[N](inner * C + col)
 
-                            res.simd_store[nelts](
-                                row * C + col,
-                                t2_val.fma(
-                                    t1_val,
-                                    curr,
-                                ),
-                            )
+    @parameter
+    @always_inline("nodebug")
+    fn res_store[N: Int, C: Int](row: Int, col: Int, val: SIMD[dtype, N]):
+        res.simd_store[N](row * C + col, val)
 
-                        vectorize[vec_n, nelts](min(col_block + BLOCK_SIZE, C))
+    @parameter
+    @always_inline("nodebug")
+    fn res_load[N: Int, C: Int](row: Int, col: Int) -> SIMD[dtype, N]:
+        return res.simd_load[N](row * C + col)
+
+    dot_generic[S1, S2, R, S, C, t1_load, t2_load, res_store, res_load]()
 
 
 # ----- Element-wise unary operations -----
