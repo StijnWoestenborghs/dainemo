@@ -142,17 +142,31 @@ fn dot_generic[
 
                         @parameter
                         fn vec_n[nelts: Int](col: Int):
-                            var curr = res_load[nelts, C](row, col)
-                            var t2_val = t2_load[nelts, C](inner, col)
+                            if nelts > C - col_block:
+                                for i in range(C - col_block):
+                                    var curr = res_load[nelts, C](row, col_block + i)
+                                    var t2_val = t2_load[nelts, C](inner, col_block + i)
 
-                            res_store[nelts, C](
-                                row,
-                                col,
-                                t2_val.fma(
-                                    t1_val,
-                                    curr,
-                                ),
-                            )
+                                    res_store[nelts, C](
+                                        row,
+                                        col_block + i,
+                                        t2_val.fma(
+                                            t1_val,
+                                            curr,
+                                        ),
+                                    )
+                            else:
+                                var curr = res_load[nelts, C](row, col)
+                                var t2_val = t2_load[nelts, C](inner, col)
+
+                                res_store[nelts, C](
+                                    row,
+                                    col,
+                                    t2_val.fma(
+                                        t1_val,
+                                        curr,
+                                    ),
+                                )
 
                         vectorize[vec_n, nelts](min(col_block + BLOCK_SIZE, C))
 
