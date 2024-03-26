@@ -113,6 +113,8 @@ fn broadcast_calculate_strides[
 
 
 # ----- Dot functions -----
+alias BLOCK_SIZE = 128
+
 @always_inline("nodebug")
 fn _should_parallelize_dot[
     t1_shape: TensorShape, t2_shape: TensorShape
@@ -125,70 +127,107 @@ fn _should_parallelize_dot[
 
 @always_inline
 fn dot[
-    t1_shape: TensorShape, t2_shape: TensorShape
+    S1: TensorShape, S2: TensorShape
 ](inout res: Tensor[dtype], t1: Tensor[dtype], t2: Tensor[dtype]):
     memset_zero[dtype](res.data(), res.num_elements())
     
-    alias M = t1_shape[0]
-    alias K = t1_shape[1]
-    alias N = t2_shape[1]
+    alias R = S1[0]
+    alias S = S1[1]
+    alias C = S2[1]
+    
+    for row_block in range(0, R, BLOCK_SIZE):
+        for col_block in range(0, C, BLOCK_SIZE):
+            for inner_block in range(0, S, BLOCK_SIZE):
+                for row in range(row_block, min(row_block + BLOCK_SIZE, R)):
+                    for inner in range(inner_block, min(inner_block + BLOCK_SIZE, S)):
+                        var t1_val = t1[row * S + inner]
 
-    for m in range(M):
-        for k in range(K):
+                        @parameter
+                        fn vec_n[nelts: Int](col: Int):
+                            var curr = res.simd_load[nelts](row * C + col)
+                            var t2_val = t2.simd_load[nelts](inner * C + col)
 
-            @parameter
-            fn vec_n[nelts: Int](n: Int):
-                res.simd_store[nelts](
-                    m * N + n,
-                    res.simd_load[nelts](m * N + n)
-                    + t1[m * K + k] * t2.simd_load[nelts](k * N + n),
-                )
+                            res.simd_store[nelts](
+                                row * C + col,
+                                t2_val.fma(
+                                    t1_val,
+                                    curr,
+                                ),
+                            )
 
-            vectorize[vec_n, nelts](N)
+                        vectorize[vec_n, nelts](min(col_block + BLOCK_SIZE, C))
 
 
+@always_inline
 fn dot_transpose_t2[
-    A_shape: TensorShape, B_shape: TensorShape
-](inout C: Tensor[dtype], A: Tensor[dtype], B: Tensor[dtype]):
-    memset_zero[dtype](C.data(), C.num_elements())
+    S1: TensorShape, S2: TensorShape
+](inout res: Tensor[dtype], t1: Tensor[dtype], t2: Tensor[dtype]):
+    memset_zero[dtype](res.data(), res.num_elements())
 
-    for i in range(A_shape[0]):
-        for j in range(B_shape[0]):
+    # Same as dot, but with t2 transposed
+    # Should be faster
 
-            @parameter
-            fn calc_row_A_B[nelts: Int](k: Int):
-                var A_pos = i * A.dim(1) + k
-                var B_pos = j * A.dim(1) + k
-                var t_new_pos = i * C.dim(1) + j
+    alias R = S1[0]
+    alias S = S1[1]
+    alias C = S2[0]
 
-                C[t_new_pos] += (
-                    A.simd_load[nelts](A_pos) * B.simd_load[nelts](B_pos)
-                ).reduce_add()
+    for row_block in range(0, R, BLOCK_SIZE):
+        for col_block in range(0, C, BLOCK_SIZE):
+            for inner_block in range(0, S, BLOCK_SIZE):
+                for row in range(row_block, min(row_block + BLOCK_SIZE, R)):
+                    for inner in range(inner_block, min(inner_block + BLOCK_SIZE, S)):
+                        var t1_val = t1[row * S + inner]
 
-            vectorize[calc_row_A_B, nelts, A_shape[1]]()
+                        @parameter
+                        fn vec_n[nelts: Int](col: Int):
+                            var curr = res.simd_load[nelts](row * C + col)
+                            var t2_val = t2.simd_load[nelts](col * S + inner)
+
+                            res.simd_store[nelts](
+                                row * C + col,
+                                t2_val.fma(
+                                    t1_val,
+                                    curr,
+                                ),
+                            )
+
+                        vectorize[vec_n, nelts](min(col_block + BLOCK_SIZE, C))
 
 
+@always_inline
 fn dot_transpose_t1[
-    A_shape: TensorShape, B_shape: TensorShape
-](inout C: Tensor[dtype], A: Tensor[dtype], B: Tensor[dtype]):
-    memset_zero[dtype](C.data(), C.num_elements())
+    S1: TensorShape, S2: TensorShape
+](inout res: Tensor[dtype], t1: Tensor[dtype], t2: Tensor[dtype]):
+    memset_zero[dtype](res.data(), res.num_elements())
 
-    for i in range(A_shape[1]):
-        for j in range(A_shape[0]):
+    # Same as dot, but with t1 transposed
+    # Should be faster
 
-            @parameter
-            fn calc_row_t_new_B[nelts: Int](k: Int):
-                var A_pos = j * A.dim(1) + i
-                var B_pos = j * B.dim(1) + k
-                var t_new_pos = i * C.dim(1) + k
+    alias R = S1[1]
+    alias S = S1[0]
+    alias C = S2[1]
 
-                C.simd_store[nelts](
-                    t_new_pos,
-                    C.simd_load[nelts](t_new_pos)
-                    + A[A_pos] * B.simd_load[nelts](B_pos),
-                )
+    for row_block in range(0, R, BLOCK_SIZE):
+        for col_block in range(0, C, BLOCK_SIZE):
+            for inner_block in range(0, S, BLOCK_SIZE):
+                for row in range(row_block, min(row_block + BLOCK_SIZE, R)):
+                    for inner in range(inner_block, min(inner_block + BLOCK_SIZE, S)):
+                        var t1_val = t1[inner * R + row]
 
-            vectorize[calc_row_t_new_B, nelts, B_shape[1]]()
+                        @parameter
+                        fn vec_n[nelts: Int](col: Int):
+                            var curr = res.simd_load[nelts](row * C + col)
+                            var t2_val = t2.simd_load[nelts](inner * C + col)
+
+                            res.simd_store[nelts](
+                                row * C + col,
+                                t2_val.fma(
+                                    t1_val,
+                                    curr,
+                                ),
+                            )
+
+                        vectorize[vec_n, nelts](min(col_block + BLOCK_SIZE, C))
 
 
 # ----- Element-wise unary operations -----
