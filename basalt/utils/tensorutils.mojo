@@ -133,6 +133,7 @@ fn dot_generic[
     res_store: fn [N: Int, C: Int](Int, Int, SIMD[dtype, N]) capturing -> None,
     res_load: fn [N: Int, C: Int](row: Int, col: Int) capturing -> SIMD[dtype, N],
 ]():
+
     for row_block in range(0, R, BLOCK_SIZE):
         for col_block in range(0, C, BLOCK_SIZE):
             for inner_block in range(0, S, BLOCK_SIZE):
