@@ -19,14 +19,12 @@ fn fill[dtype: DType](inout t: Tensor[dtype], val: SIMD[dtype, 1]):
 # ----- Functions to access positions in tensor data -----
 @always_inline
 fn get_real_index[
-    size: Int,
-    strides_shape: StaticIntTuple[size],
-    broadcast_shape: TensorShape
+    size: Int, strides_shape: StaticIntTuple[size], broadcast_shape: TensorShape
 ](i: Int) -> Int:
     # broadcast_shape is of same rank as strides_shape (the not broadcasted shape), because of broadcast_calculate_strides
     var index_res = 0
     var linear_index = i
-    
+
     @parameter
     fn unroll_dims[dim: Int]():
         alias j = size - 1 - dim
@@ -37,7 +35,7 @@ fn get_real_index[
 
         index_res += divmod_index[1] * stride_value
         linear_index = divmod_index[0]
-        
+
     unroll[unroll_dims, size]()
 
     return index_res
@@ -94,13 +92,11 @@ fn broadcast_shapes(*s: TensorShape) -> TensorShape:
 
 @always_inline
 fn broadcast_calculate_strides[
-    size: Int,
-    shape: TensorShape, 
-    broadcast_shape: TensorShape
+    size: Int, shape: TensorShape, broadcast_shape: TensorShape
 ]() -> StaticIntTuple[size]:
     alias shape_rank = shape.rank()
     alias diff = size - shape_rank
-    
+
     var strides = StaticIntTuple[size](0)
 
     var stride = 1
@@ -115,25 +111,28 @@ fn broadcast_calculate_strides[
 # ----- Dot functions -----
 alias BLOCK_SIZE = 128
 
+
 @always_inline("nodebug")
-fn _should_parallelize_dot[
-    t1_shape: TensorShape, t2_shape: TensorShape
-]() -> Bool:
+fn _should_parallelize_dot[t1_shape: TensorShape, t2_shape: TensorShape]() -> Bool:
     @parameter
     if t1_shape[0] > 256 or t1_shape[1] > 256 or t2_shape[1] > 256:
         return True
     else:
         return True
 
+
 @always_inline
 fn dot_generic[
-    S1: TensorShape, S2: TensorShape, R: Int, S: Int, C: Int, 
-    t1_load: fn [S: Int](Int, Int) capturing -> SIMD[dtype, 1], 
-    t2_load: fn [N: Int, C: Int](Int, Int) capturing -> SIMD[dtype, N],
-    res_store: fn [N: Int, C: Int](Int, Int, SIMD[dtype, N]) capturing -> None,
-    res_load: fn [N: Int, C: Int](row: Int, col: Int) capturing -> SIMD[dtype, N],
+    S1: TensorShape,
+    S2: TensorShape,
+    R: Int,
+    S: Int,
+    C: Int,
+    t1_load: fn[S: Int] (Int, Int) capturing -> SIMD[dtype, 1],
+    t2_load: fn[N: Int, C: Int] (Int, Int) capturing -> SIMD[dtype, N],
+    res_store: fn[N: Int, C: Int] (Int, Int, SIMD[dtype, N]) capturing -> None,
+    res_load: fn[N: Int, C: Int] (row: Int, col: Int) capturing -> SIMD[dtype, N],
 ]():
-
     for row_block in range(0, R, BLOCK_SIZE):
         for col_block in range(0, C, BLOCK_SIZE):
             for inner_block in range(0, S, BLOCK_SIZE):
@@ -147,7 +146,8 @@ fn dot_generic[
                             var t2_val = t2_load[nelts, C](inner, col)
 
                             res_store[nelts, C](
-                                row, col,
+                                row,
+                                col,
                                 t2_val.fma(
                                     t1_val,
                                     curr,
@@ -155,6 +155,7 @@ fn dot_generic[
                             )
 
                         vectorize[vec_n, nelts](min(col_block + BLOCK_SIZE, C))
+
 
 @always_inline
 fn dot[
@@ -185,7 +186,7 @@ fn dot[
     @always_inline("nodebug")
     fn res_load[N: Int, C: Int](row: Int, col: Int) -> SIMD[dtype, N]:
         return res.simd_load[N](row * C + col)
-    
+
     dot_generic[S1, S2, R, S, C, t1_load, t2_load, res_store, res_load]()
 
 
@@ -389,7 +390,9 @@ fn accumulate_grad[
         # In order to accumulate res_grad to the gradient, the res_grad tensor needs to be unbroadcasted.
         # The following is equivalent to: Summing along the axes that were expanded during the broadcasting process.
         alias size = res_grad_shape.rank()
-        alias strides_grad = broadcast_calculate_strides[size, grad_shape, res_grad_shape]()
+        alias strides_grad = broadcast_calculate_strides[
+            size, grad_shape, res_grad_shape
+        ]()
 
         @parameter
         fn vec_op[nelts: Int](i: Int):
