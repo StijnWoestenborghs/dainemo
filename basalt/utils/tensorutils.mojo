@@ -113,17 +113,27 @@ fn broadcast_calculate_strides[
 
 
 # ----- Dot functions -----
+@always_inline("nodebug")
+fn _should_parallelize_dot[
+    t1_shape: TensorShape, t2_shape: TensorShape
+]() -> Bool:
+    @parameter
+    if t1_shape[0] > 256 or t1_shape[1] > 256 or t2_shape[1] > 256:
+        return True
+    else:
+        return True
+
 @always_inline
 fn dot[
     t1_shape: TensorShape, t2_shape: TensorShape
 ](inout res: Tensor[dtype], t1: Tensor[dtype], t2: Tensor[dtype]):
+    memset_zero[dtype](res.data(), res.num_elements())
+    
     alias M = t1_shape[0]
     alias K = t1_shape[1]
     alias N = t2_shape[1]
-    memset_zero[dtype](res.data(), res.num_elements())
 
-    @parameter
-    fn calc_row(m: Int):
+    for m in range(M):
         for k in range(K):
 
             @parameter
@@ -136,16 +146,13 @@ fn dot[
 
             vectorize[vec_n, nelts](N)
 
-    parallelize[calc_row](M)
-
 
 fn dot_transpose_t2[
     A_shape: TensorShape, B_shape: TensorShape
 ](inout C: Tensor[dtype], A: Tensor[dtype], B: Tensor[dtype]):
     memset_zero[dtype](C.data(), C.num_elements())
 
-    @parameter
-    fn calc_row(i: Int):
+    for i in range(A_shape[0]):
         for j in range(B_shape[0]):
 
             @parameter
@@ -160,16 +167,13 @@ fn dot_transpose_t2[
 
             vectorize[calc_row_A_B, nelts, A_shape[1]]()
 
-    parallelize[calc_row](A_shape[0], 1)
-
 
 fn dot_transpose_t1[
     A_shape: TensorShape, B_shape: TensorShape
 ](inout C: Tensor[dtype], A: Tensor[dtype], B: Tensor[dtype]):
     memset_zero[dtype](C.data(), C.num_elements())
 
-    @parameter
-    fn calc_row(i: Int):
+    for i in range(A_shape[1]):
         for j in range(A_shape[0]):
 
             @parameter
@@ -185,8 +189,6 @@ fn dot_transpose_t1[
                 )
 
             vectorize[calc_row_t_new_B, nelts, B_shape[1]]()
-
-    parallelize[calc_row](A_shape[1], 1)
 
 
 # ----- Element-wise unary operations -----
